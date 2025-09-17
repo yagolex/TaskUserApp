@@ -1,1 +1,83 @@
+############################
+# Build results
+############################
+bin/
+obj/
+[Bb]uild/
+[Ll]og/
+[Ll]ogs/
+
+# Visual Studio cache/options
+.vs/
+*.dbmdl
+*.dbproj.schemaview
+
+# User-specific files
+*.suo
+*.user
+*.userosscache
+*.sln.docstates
+
+# Rider / JetBrains
+.idea/
+*.sln.iml
+
+# OS-generated files
+.DS_Store
+Thumbs.db
+
+# Packages
+*.nupkg
+*.snupkg
+*.nuspec
+packages/
+*.psess
+*.vsp
+*.vspx
+*.sap
+
+# Azure
+PublishProfiles/
+*.azurePubxml
+*.pubxml
+*.publishproj
+
+# VS Code
+.vscode/
+
+# Test results
+TestResults/
+*.coverage
+*.coveragexml
+*.trx
+
+# DotCover
+.idea/.dotCover
+
+# Resharper
+_ReSharper*/
+*.[Rr]e[Ss]harper
+*.DotSettings.user
+
+# Others
+*.swp
+*.bak
+*.tmp
+*.temp
+*.log
+*.tlog
+
+# Rider plugin files
+.idea/
+*.sln.iml
+
+# Entity Framework migrations (if you want to exclude snapshots)
+# Migrations/
+
+############################
+# Custom ignores
+############################
+
+# ignore directory with Requirements
 Requirements/
+
