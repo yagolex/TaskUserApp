@@ -11,7 +11,7 @@ namespace TaskUser.Api.Models
 
         public DateTimeOffset CreatedAt { get; set; } = DateTimeOffset.UtcNow;
         public DateTimeOffset? CompletedAt { get; set; }
-        
+
         public int? UserCountAtCompletion { get; set; }
     }
 }

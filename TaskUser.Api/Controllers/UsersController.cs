@@ -64,10 +64,15 @@ public class UsersController(AppDb db) : ControllerBase
     public async Task<IActionResult> Delete(Guid id)
     {
         var entity = await db.Users.FirstOrDefaultAsync(x => x.Id == id);
-        if (entity is null) return NotFound();
+        if (entity is null) return NotFound();        
 
         db.Users.Remove(entity);
         await db.SaveChangesAsync();
+
+        var assignments = await db.TaskAssignments.Where(a => a.UserId == entity.Id).ToListAsync();   
+        db.TaskAssignments.RemoveRange(assignments);
+        await db.SaveChangesAsync();
+
         return NoContent();
     }
 }

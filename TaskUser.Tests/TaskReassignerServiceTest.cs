@@ -1,0 +1,148 @@
+using FluentAssertions;
+using Microsoft.EntityFrameworkCore;
+using TaskUser.Api.Models;
+
+namespace TaskUser.Tests
+{
+    public class TaskReassignerServiceTest
+    {
+        [Fact]
+        public async Task Should_Assign_From_Waiting_When_Users_Exist()
+        {
+            using var db = TestHelpers.NewDb(nameof(Should_Assign_From_Waiting_When_Users_Exist));
+            db.Users.AddRange(new User { Name = "A" }, new User { Name = "B" });
+            var task = new TaskItem { Title = "T1", State = TaskState.Waiting };
+            db.Tasks.Add(task);
+            await db.SaveChangesAsync();
+
+            var svc = TestHelpers.NewService(db);
+            await svc.ReassignAsync(CancellationToken.None);
+
+            var t = await db.Tasks.FindAsync(task.Id);
+            t!.State.Should().Be(TaskState.InProgress);
+            t.CurrentAssigneeId.Should().NotBeNull();
+            t.PreviousAssigneeId.Should().BeNull();
+        }
+
+        [Fact]
+        public async Task Should_Not_Assign_To_Current_Or_Previous()
+        {
+            using var db = TestHelpers.NewDb(nameof(Should_Not_Assign_To_Current_Or_Previous));
+            var A = new User { Name = "A" }; var B = new User { Name = "B" }; var C = new User { Name = "C" };
+            db.Users.AddRange(A, B, C);
+
+            var task = new TaskItem { Title = "T1", State = TaskState.InProgress, CurrentAssigneeId = A.Id, PreviousAssigneeId = B.Id };
+            db.Tasks.Add(task);
+            await db.SaveChangesAsync();
+
+            var svc = TestHelpers.NewService(db);
+            await svc.ReassignAsync(CancellationToken.None);
+
+            var t = await db.Tasks.FindAsync(task.Id);
+            // acceptible is C only, otherwise Waiting
+            t!.CurrentAssigneeId.Should().Be(C.Id);
+            t.PreviousAssigneeId.Should().Be(A.Id);
+            t.State.Should().Be(TaskState.InProgress);
+        }
+
+        [Fact]
+        public async Task Should_Prefer_Unseen_Users()
+        {
+            using var db = TestHelpers.NewDb(nameof(Should_Prefer_Unseen_Users));
+            var A = new User { Name = "A" }; var B = new User { Name = "B" }; var C = new User { Name = "C" };
+            db.Users.AddRange(A, B, C);
+            var task = new TaskItem { Title = "T1", State = TaskState.Waiting };
+            db.Tasks.Add(task);
+            await db.SaveChangesAsync();
+
+            var svc = TestHelpers.NewService(db);
+
+            // 1st tic: someone from A/B/C
+            await svc.ReassignAsync(CancellationToken.None);
+            var t = await db.Tasks.AsNoTracking().FirstAsync();
+            var first = t.CurrentAssigneeId!.Value;
+
+            // 2nd tick: current and previous are prohibited (previous is null)
+            await svc.ReassignAsync(CancellationToken.None);
+            t = await db.Tasks.AsNoTracking().FirstAsync();
+            var second = t.CurrentAssigneeId!.Value;
+
+            // 3rd tick: current and previous are prohibited
+            await svc.ReassignAsync(CancellationToken.None);
+            t = await db.Tasks.AsNoTracking().FirstAsync();
+            var third = t.CurrentAssigneeId; // it could become Completed
+
+            var visited = await db.TaskAssignments.Where(a => a.TaskId == task.Id).Select(a => a.UserId).ToListAsync();
+            visited.Distinct().Count().Should().BeGreaterThanOrEqualTo(2);
+            visited.Should().Contain(first);
+            visited.Should().Contain(second);
+        }
+
+        [Fact]
+        public async Task Should_Complete_When_All_Users_Covered()
+        {
+            using var db = TestHelpers.NewDb(nameof(Should_Complete_When_All_Users_Covered));
+            db.Users.AddRange(new User { Name = "A" }, new User { Name = "B" }, new User { Name = "C" });
+            var t1 = new TaskItem { Title = "T1" };
+            db.Tasks.Add(t1);
+            await db.SaveChangesAsync();
+
+            var svc = TestHelpers.NewService(db);
+            for (int i = 0; i < 30; i++)
+            {
+                await svc.ReassignAsync(CancellationToken.None);
+                if ((await db.Tasks.FindAsync(t1.Id))!.State == TaskState.Completed) break;
+            }
+
+            var done = await db.Tasks.FindAsync(t1.Id);
+            done!.State.Should().Be(TaskState.Completed);
+            done.CurrentAssigneeId.Should().BeNull();
+
+            var visitedCount = await db.TaskAssignments
+                .Where(a => a.TaskId == t1.Id)
+                .Select(a => a.UserId)
+                .Distinct()
+                .CountAsync();
+            visitedCount.Should().Be(3);
+        }
+
+        [Fact]
+        public async Task Should_All_Complete_When_All_Users_Covered()
+        {
+            using var db = TestHelpers.NewDb(nameof(Should_All_Complete_When_All_Users_Covered));
+            db.Users.AddRange(new User { Name = "A" }, new User { Name = "B" }, new User { Name = "C" });
+            db.Tasks.AddRange(new TaskItem { Title = "T1" }, new TaskItem { Title = "T2" }, new TaskItem { Title = "T3" });
+            await db.SaveChangesAsync();
+
+            var svc = TestHelpers.NewService(db);
+
+            for (int i = 0; i < 20; i++)
+            {
+                await svc.ReassignAsync(CancellationToken.None);
+                var incompleted = await db.Tasks.Where(t => t.State != TaskState.Completed).ToListAsync();
+                if (incompleted.Count == 0) break;
+            }
+
+            (await db.Tasks.CountAsync(t => t.State == TaskState.Completed)).Should().Be(3);
+        }
+
+        [Fact]
+        public async Task Should_Wait_When_No_Candidates()
+        {
+            using var db = TestHelpers.NewDb(nameof(Should_Wait_When_No_Candidates));
+            var A = new User { Name = "A" };
+            db.Users.Add(A);
+            var task = new TaskItem { Title = "T1", State = TaskState.InProgress, CurrentAssigneeId = A.Id, PreviousAssigneeId = A.Id };
+            db.Tasks.Add(task);
+            await db.SaveChangesAsync();
+
+            var svc = TestHelpers.NewService(db);
+            await svc.ReassignAsync(CancellationToken.None);
+
+            var t = await db.Tasks.FindAsync(task.Id);
+            t!.State.Should().Be(TaskState.Waiting);
+            t.CurrentAssigneeId.Should().BeNull();
+            t.PreviousAssigneeId.Should().Be(A.Id);
+        }
+    }
+}

@@ -15,6 +15,7 @@ builder.Services.AddSwaggerGen();
 builder.Services.AddDbContext<AppDb>(opt =>
     opt.UseInMemoryDatabase("demo"));
 
+builder.Services.AddScoped<IRandomizer, DefaultRandomizer>();
 builder.Services.AddScoped<ITaskReassigner, TaskReassignerService>();
 builder.Services.AddHostedService<PollingBackgroundService>();
 

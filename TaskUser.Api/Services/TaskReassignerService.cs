@@ -3,24 +3,28 @@ using TaskUser.Api.Models;
 
 namespace TaskUser.Api.Services
 {
-    public class TaskReassignerService(ILogger<TaskReassignerService> logger, AppDb db) : ITaskReassigner
+    public class TaskReassignerService(AppDb db, IRandomizer rand) : ITaskReassigner
     {
-        private readonly Random _rng = new();
+        private const int MaxTasksPerUser = 3;
 
         public async Task ReassignAsync(CancellationToken ct)
         {
-            var users = await db.Users
-                .Where(u => u.IsActive)
-                .Select(u => u.Id)
-                .ToListAsync(ct);
-
+            var users = await db.Users.Where(u => u.IsActive).Select(u => u.Id).ToListAsync(ct);
             if (users.Count == 0) return;
 
-            var tasks = await db.Tasks
-                .Where(t => t.State != TaskState.Completed)
-                .ToListAsync(ct);
+            var userLoad = await db.Tasks
+                .Where(t => t.State == TaskState.InProgress && t.CurrentAssigneeId != null)
+                .GroupBy(t => t.CurrentAssigneeId!.Value)
+                .Select(g => new { UserId = g.Key, Count = g.Count() })
+                .ToDictionaryAsync(x => x.UserId, x => x.Count, ct);
 
-            tasks = tasks.OrderBy(_ => _rng.Next()).ToList(); // shaffle tasks
+            foreach (var uid in users)
+            {
+                if (!userLoad.ContainsKey(uid)) userLoad[uid] = 0;
+            }
+
+            var tasks = await db.Tasks.Where(t => t.State != TaskState.Completed).ToListAsync(ct);
+            tasks = tasks.OrderBy(_ => rand.Next(int.MaxValue)).ToList(); // shaffle
 
             foreach (var task in tasks)
             {
@@ -36,22 +40,20 @@ namespace TaskUser.Api.Services
                 if (task.CurrentAssigneeId is Guid cur) excluded.Add(cur);
                 if (task.PreviousAssigneeId is Guid prev) excluded.Add(prev);
 
-                var candidates = users.Where(u => !excluded.Contains(u)).ToList();
+                var candidates = users.Where(u => !excluded.Contains(u) &&
+                    userLoad.GetValueOrDefault(u, 0) < MaxTasksPerUser).ToList();
                 if (candidates.Count == 0)
                 {
-                    // no users available - put task on Waiting
-                    task.PreviousAssigneeId = task.CurrentAssigneeId; // set Previous
+                    task.PreviousAssigneeId = task.CurrentAssigneeId;
                     task.CurrentAssigneeId = null;
                     task.State = TaskState.Waiting;
                     continue;
                 }
 
-                // start from unvisited first
                 var unseen = candidates.Where(u => !visited.Contains(u)).ToList();
                 var pickFrom = unseen.Count > 0 ? unseen : candidates;
-                var newUserId = pickFrom[_rng.Next(pickFrom.Count)];
+                var newUserId = pickFrom[rand.Next(pickFrom.Count)];
 
-                // update assignments
                 task.PreviousAssigneeId = task.CurrentAssigneeId;
                 task.CurrentAssigneeId = newUserId;
                 task.State = TaskState.InProgress;
@@ -63,16 +65,16 @@ namespace TaskUser.Api.Services
                     AssignedAt = DateTimeOffset.UtcNow
                 });
 
-                // check coverage for all active users
-                var newVisitedCount = visited.ToHashSet();
-                newVisitedCount.Add(newUserId);
-
-                if (newVisitedCount.Count >= users.Count)
+                var newVisited = visited.ToHashSet();
+                newVisited.Add(newUserId);
+                if (newVisited.Count >= users.Count)
                 {
-                    // coverage done - Task Completed
                     task.State = TaskState.Completed;
                     task.PreviousAssigneeId = task.CurrentAssigneeId;
                     task.CurrentAssigneeId = null;
+
+                    userLoad[newUserId] = Math.Max(0, userLoad[newUserId] - 1);
+                    
                     task.CompletedAt = DateTimeOffset.UtcNow;
                     task.UserCountAtCompletion = users.Count;
                 }

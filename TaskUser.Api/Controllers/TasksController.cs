@@ -1,6 +1,7 @@
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using TaskUser.Api.Models;
+using TaskUser.Api.Services;
 
 namespace TaskUser.Api.Controllers;
 
@@ -8,7 +9,6 @@ namespace TaskUser.Api.Controllers;
 [Route("api/[controller]")]
 public class TasksController(AppDb db) : ControllerBase
 {
-
     // GET: api/tasks
     [HttpGet]
     public async Task<ActionResult<IEnumerable<TaskItem>>> GetAll()
@@ -24,27 +24,45 @@ public class TasksController(AppDb db) : ControllerBase
 
     // POST: api/tasks
     [HttpPost]
-    public async Task<ActionResult<TaskItem>> Create([FromBody] CreateTaskDto dto)
+    public async Task<ActionResult<TaskItem>> Create([FromBody] CreateTaskDto dto, CancellationToken cancellationToken)
     {
         if (string.IsNullOrWhiteSpace(dto.Title))
             return BadRequest("Title is required.");
 
-        if (!Enum.IsDefined(typeof(TaskState), dto.State))
-            return BadRequest("Invalid State.");
-
         // uniqueness Title (case-insensitive)
-        var exists = await db.Tasks.AnyAsync(t => t.Title.ToLower() == dto.Title.Trim().ToLower());
+        var exists = await db.Tasks.AnyAsync(t => t.Title.ToLower() == dto.Title.Trim().ToLower(), cancellationToken);
         if (exists) return Conflict($"Task with Title '{dto.Title}' already exists.");
 
         var entity = new TaskItem
         {
-            Title = dto.Title.Trim(),
-            State = dto.State
+            Title = dto.Title.Trim()
         };
         db.Tasks.Add(entity);
-        await db.SaveChangesAsync();
+        await db.SaveChangesAsync(cancellationToken);
+        
+        await AssignTaskToAUserAsync(entity, cancellationToken);
 
         return CreatedAtAction(nameof(GetById), new { id = entity.Id }, entity);
+    }
+
+    private async Task AssignTaskToAUserAsync(TaskItem task, CancellationToken ct)
+    {
+        var users = await db.Users.Where(u => u.IsActive).Select(u => u.Id).ToListAsync(ct);
+        if (users.Count == 0) return;
+
+        var userLoad = await db.Tasks
+            .Where(t => t.State == TaskState.InProgress && t.CurrentAssigneeId != null)
+            .GroupBy(t => t.CurrentAssigneeId!.Value)
+            .Select(g => new { UserId = g.Key, Count = g.Count() })
+            .ToDictionaryAsync(x => x.UserId, x => x.Count, ct);
+
+        var candidates = users.Where(u => userLoad.GetValueOrDefault(u, 0) < 3).ToList();
+        if (candidates.Count != 0)
+        {
+            task.CurrentAssigneeId = candidates.FirstOrDefault();
+            task.State = TaskState.InProgress;
+            await db.SaveChangesAsync(ct);
+        }
     }
 
     // PUT: api/tasks/{id}
@@ -57,46 +75,16 @@ public class TasksController(AppDb db) : ControllerBase
         if (string.IsNullOrWhiteSpace(dto.Title))
             return BadRequest("Title is required.");
 
-        if (!Enum.IsDefined(typeof(TaskState), dto.State))
-            return BadRequest("Invalid State.");
-
         var conflict = await db.Tasks
             .AnyAsync(t => t.Id != id && t.Title.ToLower() == dto.Title.Trim().ToLower());
         if (conflict) return Conflict($"Task with Title '{dto.Title}' already exists.");
 
         entity.Title = dto.Title.Trim();
-        entity.State = dto.State;
+
         await db.SaveChangesAsync();
         return Ok(entity);
-    }
-
-    // DELETE: api/tasks/{id}
-    [HttpDelete("{id:guid}")]
-    public async Task<IActionResult> Delete(Guid id)
-    {
-        var entity = await db.Tasks.FirstOrDefaultAsync(x => x.Id == id);
-        if (entity is null) return NotFound();
-
-        db.Tasks.Remove(entity);
-        await db.SaveChangesAsync();
-        return NoContent();
-    }
-
-    // (optional) PATCH: api/tasks/{id}/state?state=InProgress
-    [HttpPatch("{id:guid}/state")]
-    public async Task<ActionResult<TaskItem>> UpdateState(Guid id, [FromQuery] TaskState state)
-    {
-        var entity = await db.Tasks.FirstOrDefaultAsync(x => x.Id == id);
-        if (entity is null) return NotFound();
-
-        if (!Enum.IsDefined(typeof(TaskState), state))
-            return BadRequest("Invalid State.");
-
-        entity.State = state;
-        await db.SaveChangesAsync();
-        return Ok(entity);
-    }
+    }    
 }
 
-public record CreateTaskDto(string Title, TaskState State);
-public record UpdateTaskDto(string Title, TaskState State);
+public record CreateTaskDto(string Title);
+public record UpdateTaskDto(string Title);

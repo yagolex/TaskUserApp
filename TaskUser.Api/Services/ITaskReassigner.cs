@@ -1,3 +1,5 @@
+using TaskUser.Api.Models;
+
 namespace TaskUser.Api.Services
 {
     public interface ITaskReassigner

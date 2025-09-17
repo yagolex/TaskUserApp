@@ -43,3 +43,4 @@ D:\Repos\TaskUserApp\TaskUser.Api\bin\Debug\net8.0\Microsoft.Extensions.Logging.
 D:\Repos\TaskUserApp\TaskUser.Api\bin\Debug\net8.0\Microsoft.Extensions.Options.dll
 D:\Repos\TaskUserApp\TaskUser.Api\bin\Debug\net8.0\Microsoft.Extensions.Primitives.dll
 D:\Repos\TaskUserApp\TaskUser.Api\bin\Debug\net8.0\System.Diagnostics.DiagnosticSource.dll
+D:\Repos\TaskUserApp\TaskUser.Api\obj\Debug\net8.0\TaskUser.Api.sourcelink.json
