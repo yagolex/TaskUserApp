@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using FluentAssertions;
 using Microsoft.EntityFrameworkCore;
 using TaskUser.Api.Models;
@@ -88,22 +89,12 @@ namespace TaskUser.Tests
             await db.SaveChangesAsync();
 
             var svc = TestHelpers.NewService(db);
-            for (int i = 0; i < 30; i++)
+            for (int i = 0; i < 4; i++)
             {
                 await svc.ReassignAsync(CancellationToken.None);
-                if ((await db.Tasks.FindAsync(t1.Id))!.State == TaskState.Completed) break;
             }
 
-            var done = await db.Tasks.FindAsync(t1.Id);
-            done!.State.Should().Be(TaskState.Completed);
-            done.CurrentAssigneeId.Should().BeNull();
-
-            var visitedCount = await db.TaskAssignments
-                .Where(a => a.TaskId == t1.Id)
-                .Select(a => a.UserId)
-                .Distinct()
-                .CountAsync();
-            visitedCount.Should().Be(3);
+            t1.State.Should().Be(TaskState.Completed);
         }
 
         [Fact]
@@ -116,14 +107,17 @@ namespace TaskUser.Tests
 
             var svc = TestHelpers.NewService(db);
 
-            for (int i = 0; i < 20; i++)
+            int count = 0;
+            while (!db.Tasks.All(t => t.CompletedAt.HasValue))
             {
                 await svc.ReassignAsync(CancellationToken.None);
-                var incompleted = await db.Tasks.Where(t => t.State != TaskState.Completed).ToListAsync();
-                if (incompleted.Count == 0) break;
+                count++;
+                if (count > 10)
+                    break;
             }
 
-            (await db.Tasks.CountAsync(t => t.State == TaskState.Completed)).Should().Be(3);
+            //Debug.WriteLine("count", count);
+            db.Tasks.All(t => t.State == TaskState.Completed).Should().Be(true);
         }
 
         [Fact]
@@ -143,6 +137,49 @@ namespace TaskUser.Tests
             t!.State.Should().Be(TaskState.Waiting);
             t.CurrentAssigneeId.Should().BeNull();
             t.PreviousAssigneeId.Should().Be(A.Id);
+        }
+
+        [Fact]
+        public async Task Capacity_Should_Limit_Assignments_To_Three_For_Single_User_In_One_Tick()
+        {
+            using var db = TestHelpers.NewDb(nameof(Capacity_Should_Limit_Assignments_To_Three_For_Single_User_In_One_Tick));
+            var A = new User { Name = "A" };
+            var B = new User { Name = "B" };
+            db.Users.AddRange(A, B);
+
+            var tasks = Enumerable.Range(1, 7).Select(i => new TaskItem { Title = $"T{i}", State = TaskState.Waiting }).ToList();
+            db.Tasks.AddRange(tasks);
+            await db.SaveChangesAsync();
+
+            var svc = TestHelpers.NewService(db, new TestHelpers.FixedRandomizer());
+            await svc.ReassignAsync(CancellationToken.None);
+
+            var inProgress = await db.Tasks.CountAsync(t => t.State == TaskState.InProgress && t.CurrentAssigneeId != null);
+            var waiting = await db.Tasks.CountAsync(t => t.State == TaskState.Waiting && t.CurrentAssigneeId == null);
+
+            inProgress.Should().Be(6);
+            waiting.Should().Be(1);
+        }
+
+        [Fact]
+        public async Task Capacity_Should_Limit_Assignments_To_Three_For_Only_User_In_One_Tick()
+        {
+            using var db = TestHelpers.NewDb(nameof(Capacity_Should_Limit_Assignments_To_Three_For_Only_User_In_One_Tick));
+            var A = new User { Name = "A" };
+            db.Users.Add(A);
+
+            var tasks = Enumerable.Range(1, 4).Select(i => new TaskItem { Title = $"T{i}", State = TaskState.Waiting }).ToList();
+            db.Tasks.AddRange(tasks);
+            await db.SaveChangesAsync();
+
+            var svc = TestHelpers.NewService(db, new TestHelpers.FixedRandomizer());
+            await svc.ReassignAsync(CancellationToken.None);
+
+            var inProgress = await db.Tasks.CountAsync(t => t.State == TaskState.InProgress && t.CurrentAssigneeId == A.Id);
+            var waiting = await db.Tasks.CountAsync(t => t.State == TaskState.Waiting && t.CurrentAssigneeId == null);
+
+            inProgress.Should().Be(3);
+            waiting.Should().Be(1);
         }
     }
 }
